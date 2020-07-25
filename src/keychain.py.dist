@@ -1,0 +1,9 @@
+'''
+keychain file do not push wish credentials!
+
+Instructions, rename this file to keychain.py and fill in client_id and client_secret from your Strava app
+'''
+app = {
+    'client_id' : 42,  # int
+    'client_secret' : '',  # string
+}

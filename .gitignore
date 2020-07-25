@@ -128,5 +128,14 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-#custom files
-strava_config.py
+# Keychain with potentially sensitive data
+keychain.py
+
+# User OAuth2 token
+strava_token.json
+
+# Pandas csv
+*.csv
+
+# VS Code settings file
+settings.json
