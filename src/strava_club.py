@@ -4,6 +4,7 @@ import os
 import pprint
 import random
 import re
+import requests
 import socket
 import time
 import urllib.parse
@@ -43,8 +44,8 @@ chrome_options.add_argument('--no-sandbox')
 #                          options=chrome_options
 #                          )
 
-#driver = webdriver.Chrome(options=chrome_options)
-#driver.implicitly_wait(10)  # seconds
+driver = webdriver.Chrome(options=chrome_options)
+driver.implicitly_wait(10)  # seconds
 
 
 class StravaAccess:
@@ -181,9 +182,34 @@ def get_data(output='strava_results.csv', club_id=121898):
 
 
 def clean_data(data):
+    # set category for columns
+    data['activity_type'] = data['activity_type'].astype('category')
+    data['activity_type_detail'] = data['activity_type_detail'].astype('category')
+    data['athlete_firstname'] = data['athlete_firstname'].astype('category')
+    data['athlete_name'] = data['athlete_name'].astype('category')
+    data['club_name'] = data['club_name'].astype('category')
+    data['device'] = data['device'].astype('category')
+
+    # get data organized for heatmap
+    df_heat = dist_calc(data)
+
+    # Remove not needed columns
+    data.drop(['latlng_stream'], axis=1, inplace=True)
+    data.drop(['Tough Relative Effort', 'Historic Relative Effort', 'Massive Relative Effort'], axis=1, inplace=True)
+
+    # More cleanup
+    data['Power'] = data['Power'].str.replace('W', '')
+    data['Power'] = data['Power'].fillna(0).astype('int32')
+    data['Cadence'] = data['Cadence'].fillna(0).astype('int32')
+    data['club_mem_count'] = data['club_mem_count'].astype('int32')
+
+    data['Temperature'] = pd.to_numeric(data['Temperature'].str.replace('℉', '')).fillna(-63).astype('int32')
+    data['Heart Rate'] = pd.to_numeric(data['Heart Rate'].str.replace('bpm', '')).fillna(0).astype('int32')
+    data['Calories'] = pd.to_numeric(data['Calories'].str.replace(',', '')).fillna(0).astype('int32')
+
     data['Moving Time'].fillna(data['Elapsed Time'], inplace=True)
 
-    # convert from object to delta time to merge on value
+    # convert from object to delta time
     data['Moving Time'] = data.apply(
         lambda row: "".join(["0", row['Moving Time']]) if len(row['Moving Time']) == 4 else row['Moving Time'],
         axis=1)
@@ -194,7 +220,7 @@ def clean_data(data):
         lambda row: row['Moving Time'] if len(row['Moving Time']) == 8 else "".join(["0", row['Moving Time']]),
         axis=1)
 
-    # convert from object to delta time to merge on value
+    # convert from object to delta time
     data['Elapsed Time'] = data.apply(
         lambda row: "".join(["0", row['Elapsed Time']]) if len(row['Elapsed Time']) == 4 else row['Elapsed Time'],
         axis=1)
@@ -206,6 +232,7 @@ def clean_data(data):
         lambda row: row['Elapsed Time'] if len(row['Elapsed Time']) == 8 else "".join(["0", row['Elapsed Time']]),
         axis=1)
 
+    # Make conversion to timedelta
     data['Moving Time'] = pd.to_timedelta(data['Moving Time'])
     data['Elapsed Time'] = pd.to_timedelta(data['Elapsed Time'])
 
@@ -213,26 +240,29 @@ def clean_data(data):
     data['moving_time2'] = data['Moving Time'].values.astype(np.int64) / 3.6e+12
     data['elapsed_time2'] = data['Elapsed Time'].values.astype(np.int64) / 3.6e+12
 
+    # Distance formatting
     data['Distance'] = data['Distance'].str.replace(',', '')
-
     data[['Distance', 'Distance_Unit']] = data['Distance'].str.extract(r'([\d.]+)(\D+)')
-
     unit_convert = {'mi': 1, 'm': (1 / 1609)}
     data['distance_mi'] = pd.to_numeric(data['Distance']) * data['Distance_Unit'].map(unit_convert).fillna(0)
+    data['distance_mi'] = data['distance_mi'].astype('float32')
+    data.drop(['Distance', 'Distance_Unit'], axis=1, inplace=True)
 
-    # data['distance_mi'] = data['Distance'].str.replace('mi', '')
-    data['distance_mi'] = data['distance_mi'].astype(float)
-
+    # Elevation formatting
     data['Elevation'].fillna('0ft', inplace=True)
-
     data['total_elevation_gain_ft'] = data['Elevation'].str.replace('ft', '').replace(',', '')
     data['total_elevation_gain_ft'] = data['total_elevation_gain_ft'].str.replace(',', '')
-    data['total_elevation_gain_ft'] = data['total_elevation_gain_ft'].astype(float)
+    data['total_elevation_gain_ft'] = data['total_elevation_gain_ft'].astype('int32')
     data['total_elevation_gain_ft'].fillna(0, inplace=True)
+    # Keep column for formatted column
+    # data.drop(['Elevation'], axis=1, inplace=True)
 
     # for time formatting
     pd.to_datetime(data['activity_local_time'])
-    return data
+    data['activity_local_time2'] = pd.to_datetime(data['activity_local_time']).dt.tz_convert('US/Mountain')
+    data.drop(['activity_local_time'], axis=1, inplace=True)
+
+    return data, df_heat
 
 
 def dist_calc(df):
@@ -247,9 +277,7 @@ def dist_calc(df):
 
     df_heat = pd.concat(data_list)
 
-    df_heat['lat'] = np.radians(df_heat['Latitude'])
-    df_heat['lon'] = np.radians(df_heat['Longitude'])
-
+    df_heat[['Latitude', 'Longitude']] = df_heat[['Latitude', 'Longitude']].apply(pd.to_numeric, downcast='float')
     return df_heat
 
 
@@ -263,20 +291,17 @@ def time_format(x):
 def plot_data(data):
     print("entering plot")
 
-    data = clean_data(data)
 
+    data, df_heat = clean_data(data)
+
+
+
+
+    # Some recoding for scales and index
     data['activity_code'], factor_list = pd.factorize(data['activity_type'], sort=True)
     factor_list = list(factor_list)
 
-
-    data['activity_local_time2'] = pd.to_datetime(data['activity_local_time']).dt.tz_convert('US/Mountain')
-    #print(data['activity_local_time2'])
-
-    data['activity_start_time'] = data['activity_local_time2'].dt.time
-    #data['activity_start_day'] = data['activity_local_time2'].dt.day
-    #data['activity_start_day']= data['activity_local_time2'].dt.strftime('%Y-%m-%d')
-    #print(data['activity_start_day'])
-
+    # Summary data
     df_sum = data.groupby([data['activity_type'],data['activity_local_time2'].dt.date]).agg({
         'distance_mi': 'sum',
         'total_elevation_gain_ft': 'sum',
@@ -293,8 +318,7 @@ def plot_data(data):
 
     }).groupby(level=0).cumsum().reset_index()
 
-    #print(df_sum)
-    #print(df_sum.columns)
+
 
     # Build colorscale
     fix_color_map = {}
@@ -319,6 +343,7 @@ def plot_data(data):
                      "activity_local_time2": "Date ",
                      "activity_type": "Activity Type"
                  }, color_discrete_map=fix_color_map, template="simple_white", color='activity_type')
+    fig_sum.update_traces(connectgaps=True)
     fig_sum.update_layout(
         title={
             'text': "Cumulative Club Statistics",
@@ -332,6 +357,7 @@ def plot_data(data):
                      "activity_local_time2": "Date ",
                      "athlete_name": "Athlete Name"
                  }, color_discrete_map=fix_color_map, template="simple_white", color='athlete_name')
+    fig_sump.update_traces(connectgaps=True)
     fig_sump.update_layout(
         title={
             'text': "Cumulative Member Statistics",
@@ -340,21 +366,9 @@ def plot_data(data):
             'xanchor': 'center',
             'yanchor': 'top'})
 
-    #print(df_sum.cum_sum())
-
-    #print(df_cum)
-    #df_cum.columns = list(map('_'.join, df_cum.columns))
-    #print(df_cum)
 
 
-
-    #print(data)
-    #print(data.columns)
-    #print(data.dtypes)
-
-
-
-    #summary data
+    #summary data // group
     df1 = data.groupby(['activity_type']).agg({
         'activity_type': 'count',
         'distance_mi': ['mean', 'sum'],
@@ -397,18 +411,6 @@ def plot_data(data):
             'xanchor': 'center',
             'yanchor': 'top'})
 
-    #https://plotly.com/python/parallel-categories-diagram/
-    #https://plotly.com/python/figurewidget-app/
-
-
-    #fig_wig = go.FigureWidget()
-    # Build figure as FigureWidget
-
-    #trace1 = go.Scatter(x=data['distance_mi'], y=data['moving_time2'],)
-
-    #https://plotly.com/python/parallel-coordinates-plot/
-
-
     fig_par = go.Figure(data=go.Parcoords(
         line=dict(color=data['activity_code'],
                   colorscale=custom_color_scale),
@@ -431,17 +433,6 @@ def plot_data(data):
             'xanchor': 'center',
             'yanchor': 'top'})
 
-
-
-    #fig_par = px.parallel_coordinates(data, color="activity_code",
-    #                                  dimensions={"distance_mi", "total_elevation_gain_ft", "moving_time2",
-    #                                              "elapsed_time2", "activity_code"}, template="simple_white")
-
-    #fig_wig.add_bar(y=[1, 4, 3, 2]);
-
-    #fig_pie = px.pie(df1, values='activity_type_count', names=df1.index, title='Activity Count %')
-    #fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-    # fig_pie.write_html("strava1.html")
 
     fig_hist = px.histogram(data, x="activity_type", labels={
                      "activity_type": "Activity Type",}, color='activity_type', color_discrete_map=fix_color_map, template="simple_white")
@@ -514,50 +505,13 @@ def plot_data(data):
                    align=['left'],))
     ])
 
-    df1['activity_type1'] = df1.index
-
-    cols = df1.columns.tolist()
-    cols.insert(0, cols.pop(cols.index('activity_type1')))
-    df1 = df1.reindex(columns=cols)
-
-
-
-
-
-    #TODO Make sure only column of interest are in table// subset columns
-    tab_cols = [{'name': 'Activity Type', 'id': 'activity_type1'},
-                {'name': 'Count', 'id': 'activity_type_count'},
-                {'name': 'Average Distance (mi)', 'id': 'distance_mi_mean'},
-                {'name': 'Total Distance (mi)', 'id': 'distance_mi_sum'},
-                {'name': 'Average Elevation Gain (ft)', 'id': 'total_elevation_gain_ft_mean'},
-                {'name': 'Total Elevation Gain (ft)', 'id': 'total_elevation_gain_ft_sum'},
-                {'name': 'Average Moving Time (hrs)', 'id': 'moving_time2_mean'},
-                {'name': 'Average Elapsed Time (hrs)', 'id': 'elapsed_time2_mean'}]
-    fig_table2_broken = dash_table.DataTable(
-        id='table1',
-        #columns=[{"name": i, "id": i} for i in df1.columns],
-        columns=tab_cols,
-        data=df1.to_dict("rows"),
-        style_header={
-            'textAlign': 'left',
-        },
-        style_cell_conditional=[
-            {
-                'if': {'column_id': 'activity_type1'},
-                'textAlign': 'left'
-            }
-        ]
-    )
-
-    df_heat = dist_calc(data)
 
     m = folium.Map([40.087424, -105.190813], zoom_start=11)
     # convert to (n, 2) nd-array format for heatmap
     stationArr = df_heat[['Latitude', 'Longitude']].values
     # plot heatmap
-    m.add_children(plugins.HeatMap(stationArr, radius=7))
+    m.add_child(plugins.HeatMap(stationArr, radius=7))
     m.save(os.path.join(os.path.dirname(__file__), 'assets', "heatmap.html"))
-
 
     graph1 = dcc.Graph(
         id='graph1',
@@ -621,6 +575,7 @@ def plot_data(data):
     row6 = html_dash.Div(children=[table2])
 
     layout = html_dash.Div(children=[header, row1, row2, row3, row4, row5, row6], style={"text-align": "center"})
+    #return layout
     app.layout = layout
     # app.run_server(debug=True)
 
@@ -673,12 +628,17 @@ def parse_feed(data):
 
 def parse_activity(activity_list):
     compile_data = []
+
+    counter = 0
+
     for act_id in activity_list:
 
         # limit age of activity
         if int(act_id[0]) < 3816205386:
             print("too old")
             continue
+        #if counter > 10:
+        #    break
 
         print("Getting Activity: " + act_id[0])
         driver.get("https://www.strava.com/activities/" + act_id[0])
@@ -720,7 +680,7 @@ def parse_activity(activity_list):
         activity_detail['activity_type_detail'] = activity_type_detail
 
         # activity_local_time = tree.xpath('//time/text()')[0].strip('\n')
-        activity_detail['activity_local_time'] = act_id[1]
+        activity_detail['activity_local_time'] = str(act_id[1])
 
         inline_stats = tree.xpath('//ul[@class="inline-stats section"]/li')
 
@@ -790,16 +750,35 @@ def parse_activity(activity_list):
 
         print(activity_detail)
 
-        # stream data for heatmap
-        # driver.get("https://www.strava.com/activities/" + act_id[0] + "/streams?stream_types%5B%5D=latlng&_=1595971502148")
-        driver.get("https://www.strava.com/activities/" + act_id[0] + "/streams?stream_types%5B%5D=latlng")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36"
+        }
 
-        root = html.document_fromstring(driver.page_source)
-        ll_stream = root.text_content()  # extract text// remove html elements
-        if 'latlng' in ll_stream:
-            activity_detail['latlng_stream'] = ll_stream
+        latlng = ''
+        r = requests.get("https://www.strava.com/activities/" + act_id[0], headers=headers)
+        #print(r.status_code)
+        if r.status_code == 200:
+            # print(r.text)
+            # https://www.scrapehero.com/how-to-rotate-proxies-and-ip-addresses-using-python-3/
+            m = re.search('quot;latlng&quot;:(.*),&quot;unitSystem', r.text)
+            # print(m)
+            if m:
+                # print(m.group(1))
+                print("Getting track from public activity")
+                latlng = '{"latlng":' + m.group(1) + '}'
+                activity_detail['latlng_stream'] = latlng
+                #print(latlng)
+        if len(latlng) <5 :
+            print("Getting activity track from stream")
+            driver.get("https://www.strava.com/activities/" + act_id[0] + "/streams?stream_types%5B%5D=latlng")
+
+            root = html.document_fromstring(driver.page_source)
+            ll_stream = root.text_content()  # extract text// remove html elements
+            if 'latlng' in ll_stream:
+                activity_detail['latlng_stream'] = ll_stream
 
         compile_data.append(activity_detail)
+        counter = counter + 1
     return compile_data
 
 
@@ -874,29 +853,25 @@ def main():
             df = get_details(output=args.out_file, club_id=args.club_id)
     else:
         #df = get_details(output=args.out_file, club_id=args.club_id)
+        driver.quit()
         df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'output', args.out_file))
 
-    # df_details = get_details(output=args.out_file, club_id=args.club_id)
-
-    # df_master = merge_data(df, df_details)
-
-    #print(df)
 
     plot_data(df)
 
     # debug=True enables hot reload in new versions
-    #app.run_server(debug=True, threaded=True)
+    app.run_server(debug=True, threaded=True)
 
     # production
-    host = socket.gethostbyname(socket.gethostname())
+    #host = socket.gethostbyname(socket.gethostname())
     # print(host)
-    app.run_server(debug=False, host=host, port=8050)
+    #app.run_server(debug=False, host=host, port=8050)
 
 
 if __name__ == '__main__':
     # global dash app
     # external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     # app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
-    app = dash.Dash(__name__)
 
+    app = dash.Dash(__name__)
     main()
