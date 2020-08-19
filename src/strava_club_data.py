@@ -145,8 +145,20 @@ def parse_feed(data):
 
         actuple = []
         for a in activities:
-            timestamp = tree.xpath('//div[@id="' + a + '"]//time/@datetime')
-            actuple.append((a.replace('Activity-', ''), timestamp[0]))
+            timestamp = tree.xpath('//div[contains(@id,"' + a + '")]//time/@datetime')
+            if timestamp:
+                actuple.append((a.replace('Activity-', ''), timestamp[0]))
+            elif len(timestamp) == 0:
+
+                group_act = tree.xpath('//div[@class="feed-entry group-activity"]')
+
+                for group_part in group_act:
+                    detail = group_part.xpath('//li[@id="' + a + '"]')
+                    if detail:
+                        timestamp = group_part.xpath('.//time/@datetime')
+                        actuple.append((a.replace('Activity-', ''), timestamp[0]))
+            else:
+                actuple.append((a.replace('Activity-', ''), ''))
 
         print(actuple)
 
