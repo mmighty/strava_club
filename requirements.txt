@@ -30,5 +30,5 @@ selenium==3.141.0
 six==1.15.0
 stravalib==0.10.2
 units==0.7
-urllib3==1.25.10
+urllib3==1.26.5
 Werkzeug==1.0.1
